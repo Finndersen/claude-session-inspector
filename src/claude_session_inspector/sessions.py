@@ -220,8 +220,7 @@ class SessionInfo:
     last_timestamp: datetime | None
     git_branch: str | None
     cwd: str | None
-    user_message_count: int
-    assistant_message_count: int
+    file_size_bytes: int
 
 
 def _read_last_lines(file_path: Path, n: int = 20) -> list[str]:
@@ -233,23 +232,6 @@ def _read_last_lines(file_path: Path, n: int = 20) -> list[str]:
         f.seek(max(0, size - read_size))
         data = f.read(read_size).decode("utf-8", errors="replace")
     return [line for line in data.splitlines() if line.strip()][-n:]
-
-
-def _count_messages(file_path: Path) -> tuple[int, int]:
-    """Count user and assistant message lines via fast string matching.
-
-    Note: counts include meta, sidechain, and compact-summary lines since we avoid
-    a full JSON parse here for efficiency. The counts are approximate indicators.
-    """
-    user_count = 0
-    assistant_count = 0
-    with file_path.open("r", errors="replace") as f:
-        for line in f:
-            if '"type":"user"' in line or '"type": "user"' in line:
-                user_count += 1
-            elif '"type":"assistant"' in line or '"type": "assistant"' in line:
-                assistant_count += 1
-    return user_count, assistant_count
 
 
 def get_session_metadata(session_file: Path, project_dir: str) -> SessionInfo | None:
@@ -313,8 +295,6 @@ def get_session_metadata(session_file: Path, project_dir: str) -> SessionInfo | 
             except (ValueError, TypeError):
                 continue
 
-        user_count, assistant_count = _count_messages(session_file)
-
         return SessionInfo(
             session_id=session_id,
             project_name=resolve_project_name(project_dir),
@@ -325,8 +305,7 @@ def get_session_metadata(session_file: Path, project_dir: str) -> SessionInfo | 
             last_timestamp=last_timestamp,
             git_branch=git_branch,
             cwd=cwd,
-            user_message_count=user_count,
-            assistant_message_count=assistant_count,
+            file_size_bytes=session_file.stat().st_size,
         )
     except OSError:
         return None

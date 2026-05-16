@@ -29,8 +29,7 @@ def mock_session(
     ),
     git_branch: str | None = "main",
     cwd: str | None = "/path/to/project",
-    user_count: int = 5,
-    assistant_count: int = 4,
+    file_size_bytes: int = 4096,
 ) -> SessionInfo:
     """Create a mock SessionInfo for testing."""
     return SessionInfo(
@@ -43,8 +42,7 @@ def mock_session(
         last_timestamp=last_timestamp,
         git_branch=git_branch,
         cwd=cwd,
-        user_message_count=user_count,
-        assistant_message_count=assistant_count,
+        file_size_bytes=file_size_bytes,
     )
 
 
@@ -69,13 +67,12 @@ def test_list_sessions_single():
         "claude_session_inspector.server.discover_sessions", return_value=[session]
     ):
         result = list_sessions()
-        assert "Found 1 session" in result
-        assert "Session: abc123" in result
-        assert "Project: TestProject" in result
-        assert "Branch: main" in result
+        assert "Showing 1 of 1 sessions" in result
+        assert "abc123" in result
+        assert "TestProject" in result
+        assert "main" in result
         assert "2026-05-16 10:30 UTC" in result
         assert "2026-05-16 09:15 UTC" in result
-        assert "Messages: 5 user / 4 assistant" in result
 
 
 def test_list_sessions_multiple():
@@ -89,29 +86,27 @@ def test_list_sessions_multiple():
         "claude_session_inspector.server.discover_sessions", return_value=sessions
     ):
         result = list_sessions()
-        assert "Found 3 sessions" in result
-        assert "Session: aaa" in result
-        assert "Session: bbb" in result
-        assert "Session: ccc" in result
+        assert "Showing 3 of 3 sessions" in result
+        assert "aaa" in result
+        assert "bbb" in result
+        assert "ccc" in result
 
 
 def test_list_sessions_plural_vs_singular():
-    """Test correct singular/plural in count header."""
-    # Single
+    """Test header line shows correct counts."""
     with patch(
         "claude_session_inspector.server.discover_sessions",
         return_value=[mock_session()],
     ):
         result = list_sessions()
-        assert "Found 1 session" in result
+        assert "Showing 1 of 1 sessions" in result
 
-    # Multiple
     sessions = [mock_session(session_id=f"id{i}") for i in range(2)]
     with patch(
         "claude_session_inspector.server.discover_sessions", return_value=sessions
     ):
         result = list_sessions()
-        assert "Found 2 sessions" in result
+        assert "Showing 2 of 2 sessions" in result
 
 
 def test_list_sessions_with_project_filter():
@@ -130,8 +125,7 @@ def test_list_sessions_none_timestamps():
         "claude_session_inspector.server.discover_sessions", return_value=[session]
     ):
         result = list_sessions()
-        assert "Last active: unknown" in result
-        assert "Started: unknown" in result
+        assert result.count("unknown") >= 2
 
 
 def test_list_sessions_none_branch():
@@ -141,50 +135,35 @@ def test_list_sessions_none_branch():
         "claude_session_inspector.server.discover_sessions", return_value=[session]
     ):
         result = list_sessions()
-        assert "Branch: unknown" in result
+        assert "unknown" in result
 
 
-def test_list_sessions_none_cwd_fallback():
-    """Test that None cwd falls back to the session file's parent directory."""
-    session = mock_session(cwd=None)
-    expected_dir = str(session.file_path.parent)
-    with patch(
-        "claude_session_inspector.server.discover_sessions", return_value=[session]
-    ):
-        result = list_sessions()
-        assert f"Directory: {expected_dir}" in result
-
-
-def test_list_sessions_first_prompt_rendered():
-    """Test that first_prompt is rendered as-is from SessionInfo (truncation is sessions.py's responsibility)."""
+def test_list_sessions_first_prompt_truncated():
+    """Test that first_prompt longer than 80 chars is truncated in table output."""
     prompt = "x" * 200
     session = mock_session(first_prompt=prompt)
     with patch(
         "claude_session_inspector.server.discover_sessions", return_value=[session]
     ):
         result = list_sessions()
-        assert "First prompt: " + "x" * 200 in result
+        assert "x" * 80 + "..." in result
+        assert "x" * 200 not in result
 
 
-def test_list_sessions_all_fields_present():
-    """Test that all expected fields are in the output."""
+def test_list_sessions_table_columns():
+    """Test that table header contains expected columns."""
     session = mock_session()
     with patch(
         "claude_session_inspector.server.discover_sessions", return_value=[session]
     ):
         result = list_sessions()
-        required_fields = [
-            "Session:",
-            "Project:",
-            "Branch:",
-            "Last active:",
-            "Started:",
-            "Messages:",
-            "Directory:",
-            "First prompt:",
-        ]
-        for field in required_fields:
-            assert field in result, f"Missing field: {field}"
+        assert "session_id" in result
+        assert "project" in result
+        assert "branch" in result
+        assert "last_active" in result
+        assert "started" in result
+        assert "size_kb" in result
+        assert "first_prompt" in result
 
 
 # ─────────────────────────────────────────────────────────────────────────
