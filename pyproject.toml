@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "claude-session-inspector"
+version = "0.1.0"
+description = "MCP server that provides visibility and inspection of all Claude Code sessions"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp[cli]",
+]
+
+[project.scripts]
+claude-session-inspector = "claude_session_inspector.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/claude_session_inspector"]
