@@ -31,23 +31,22 @@ def _format_timestamp(dt: datetime | None) -> str:
     return dt.strftime("%Y-%m-%d %H:%M UTC")
 
 
-def _format_session(session: SessionInfo) -> str:
-    """Format a single session as a block."""
-    branch = session.git_branch or "unknown"
-    cwd = session.cwd or str(session.file_path.parent)
-    first_prompt = session.first_prompt if session.first_prompt else "(empty)"
-
-    user_count = session.user_message_count
-    assistant_count = session.assistant_message_count
-
-    return f"""Session: {session.session_id}
-Project: {session.project_name}
-Branch: {branch}
-Last active: {_format_timestamp(session.last_timestamp)}
-Started: {_format_timestamp(session.first_timestamp)}
-Messages: {user_count} user / {assistant_count} assistant
-Directory: {cwd}
-First prompt: {first_prompt}"""
+def _format_sessions_table(sessions: list[SessionInfo]) -> str:
+    """Format a list of sessions as a pipe-separated table."""
+    header = "session_id | project | branch | last_active | started | user_msgs | asst_msgs | first_prompt"
+    rows = [header]
+    for s in sessions:
+        branch = s.git_branch or "unknown"
+        last_active = _format_timestamp(s.last_timestamp)
+        started = _format_timestamp(s.first_timestamp)
+        prompt = (s.first_prompt or "").replace("|", " ").replace("\n", " ").strip()
+        if len(prompt) > 80:
+            prompt = prompt[:80] + "..."
+        rows.append(
+            f"{s.session_id} | {s.project_name} | {branch} | {last_active} | {started}"
+            f" | {s.user_message_count} | {s.assistant_message_count} | {prompt}"
+        )
+    return "\n".join(rows)
 
 
 def _format_search_result(match: SearchMatch) -> str:
@@ -64,7 +63,7 @@ First prompt: {first_prompt}"""
 
 
 @mcp.tool()
-def list_sessions(project: str | None = None) -> str:
+def list_sessions(project: str | None = None, max_results: int = 20) -> str:
     """List recent Claude Code sessions to understand what the user has been working on.
 
     Use this to get an overview of the user's recent activity across projects — for example,
@@ -76,6 +75,9 @@ def list_sessions(project: str | None = None) -> str:
     Args:
         project: Optional project name filter (case-insensitive substring match).
                  If omitted, lists all sessions across all projects.
+        max_results: Maximum number of sessions to return (default: 20). If the limit is
+                     reached there may be more sessions — use the project filter or
+                     search_sessions to narrow results.
     """
     sessions = discover_sessions(project_filter=project)
 
@@ -84,14 +86,21 @@ def list_sessions(project: str | None = None) -> str:
             return f"No sessions found matching '{project}'."
         return "No sessions found."
 
-    count = len(sessions)
-    count_text = "session" if count == 1 else "sessions"
-    header = f"Found {count} {count_text} (showing most recent first):\n"
+    total = len(sessions)
+    truncated = total > max_results
+    sessions = sessions[:max_results]
 
-    blocks = [_format_session(s) for s in sessions]
-    separator = "\n" + "─" * 34 + "\n"
+    header = f"Showing {len(sessions)} of {total} sessions (most recent first):\n"
+    table = _format_sessions_table(sessions)
 
-    return header + separator + separator.join(blocks) + "\n" + "─" * 34
+    suffix = ""
+    if truncated:
+        suffix = (
+            f"\n\n[Results truncated at {max_results}. Use the project= filter to narrow by "
+            f"project name, or use search_sessions to find sessions matching a specific topic.]"
+        )
+
+    return header + table + suffix
 
 
 @mcp.tool()
