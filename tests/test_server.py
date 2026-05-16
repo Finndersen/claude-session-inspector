@@ -1,12 +1,12 @@
 """Tests for the MCP server and list_sessions tool."""
 
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 from claude_session_inspector.search import SearchMatch
-from claude_session_inspector.server import list_sessions, search_sessions
-from claude_session_inspector.sessions import SessionInfo
-from pathlib import Path
+from claude_session_inspector.server import list_sessions, search_sessions, view_session_messages
+from claude_session_inspector.sessions import AssistantMessage, SessionInfo, UserMessage
 
 
 def mock_session(
@@ -286,3 +286,296 @@ def test_search_sessions_all_fields_present():
         ]
         for field in required_fields:
             assert field in result, f"Missing field: {field}"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# view_session_messages tests
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def mock_user_message(
+    text: str = "Hello, help me with this",
+    timestamp: datetime | None = None,
+    git_branch: str | None = "main",
+) -> UserMessage:
+    """Create a mock UserMessage for testing."""
+    if timestamp is None:
+        timestamp = datetime(2026, 5, 16, 10, 0, tzinfo=timezone.utc)
+    return UserMessage(
+        uuid="user-1",
+        timestamp=timestamp,
+        text=text,
+        tool_results=[],
+        is_sidechain=False,
+        cwd="/path/to/project",
+        git_branch=git_branch,
+        session_id="test-session",
+    )
+
+
+def mock_assistant_message(
+    text: str = "Here is the response",
+    timestamp: datetime | None = None,
+) -> AssistantMessage:
+    """Create a mock AssistantMessage for testing."""
+    if timestamp is None:
+        timestamp = datetime(2026, 5, 16, 10, 5, tzinfo=timezone.utc)
+    return AssistantMessage(
+        uuid="assistant-1",
+        timestamp=timestamp,
+        text=text,
+        tool_calls=[],
+        model="claude-opus",
+        is_sidechain=False,
+    )
+
+
+def test_view_session_messages_first_prompt():
+    """Test first_prompt mode returns first user message."""
+    messages = [
+        mock_user_message("First question", timestamp=datetime(2026, 5, 16, 9, 0, tzinfo=timezone.utc)),
+        mock_assistant_message(timestamp=datetime(2026, 5, 16, 9, 5, tzinfo=timezone.utc)),
+        mock_user_message("Second question", timestamp=datetime(2026, 5, 16, 10, 0, tzinfo=timezone.utc)),
+    ]
+
+    with patch("claude_session_inspector.server.find_session_file") as mock_find, patch(
+        "claude_session_inspector.server.load_session"
+    ) as mock_load, patch("claude_session_inspector.server.resolve_project_name") as mock_resolve:
+        mock_find.return_value = Path("/tmp/test-session.jsonl")
+        mock_load.return_value = messages
+        mock_resolve.return_value = "TestProject"
+
+        result = view_session_messages("test-session", mode="first_prompt")
+
+        assert "[USER]" in result
+        assert "First question" in result
+        assert "TestProject" in result
+        assert "first_prompt" in result
+        assert "Second question" not in result
+
+
+def test_view_session_messages_recent_prompt():
+    """Test recent_prompt mode returns most recent user message."""
+    messages = [
+        mock_user_message("First question", timestamp=datetime(2026, 5, 16, 9, 0, tzinfo=timezone.utc)),
+        mock_assistant_message(timestamp=datetime(2026, 5, 16, 9, 5, tzinfo=timezone.utc)),
+        mock_user_message("Recent question", timestamp=datetime(2026, 5, 16, 10, 0, tzinfo=timezone.utc)),
+    ]
+
+    with patch("claude_session_inspector.server.find_session_file") as mock_find, patch(
+        "claude_session_inspector.server.load_session"
+    ) as mock_load, patch("claude_session_inspector.server.resolve_project_name") as mock_resolve:
+        mock_find.return_value = Path("/tmp/test-session.jsonl")
+        mock_load.return_value = messages
+        mock_resolve.return_value = "TestProject"
+
+        result = view_session_messages("test-session", mode="recent_prompt")
+
+        assert "[USER]" in result
+        assert "Recent question" in result
+        assert "TestProject" in result
+        assert "recent_prompt" in result
+        assert "First question" not in result
+
+
+def test_view_session_messages_latest_response():
+    """Test latest_response mode returns most recent assistant message with text."""
+    messages = [
+        mock_user_message("First question", timestamp=datetime(2026, 5, 16, 9, 0, tzinfo=timezone.utc)),
+        mock_assistant_message(
+            "First response", timestamp=datetime(2026, 5, 16, 9, 5, tzinfo=timezone.utc)
+        ),
+        mock_user_message("Second question", timestamp=datetime(2026, 5, 16, 10, 0, tzinfo=timezone.utc)),
+        mock_assistant_message(
+            "Latest response", timestamp=datetime(2026, 5, 16, 10, 5, tzinfo=timezone.utc)
+        ),
+    ]
+
+    with patch("claude_session_inspector.server.find_session_file") as mock_find, patch(
+        "claude_session_inspector.server.load_session"
+    ) as mock_load, patch("claude_session_inspector.server.resolve_project_name") as mock_resolve:
+        mock_find.return_value = Path("/tmp/test-session.jsonl")
+        mock_load.return_value = messages
+        mock_resolve.return_value = "TestProject"
+
+        result = view_session_messages("test-session", mode="latest_response")
+
+        assert "[ASSISTANT]" in result
+        assert "Latest response" in result
+        assert "TestProject" in result
+        assert "latest_response" in result
+        assert "First response" not in result
+
+
+def test_view_session_messages_all_mode():
+    """Test all mode returns formatted conversation."""
+    messages = [
+        mock_user_message("Hello", timestamp=datetime(2026, 5, 16, 9, 0, tzinfo=timezone.utc)),
+        mock_assistant_message(timestamp=datetime(2026, 5, 16, 9, 5, tzinfo=timezone.utc)),
+        mock_user_message("Follow up", timestamp=datetime(2026, 5, 16, 10, 0, tzinfo=timezone.utc)),
+    ]
+
+    with patch("claude_session_inspector.server.find_session_file") as mock_find, patch(
+        "claude_session_inspector.server.load_session"
+    ) as mock_load, patch("claude_session_inspector.server.resolve_project_name") as mock_resolve, patch(
+        "claude_session_inspector.server.format_conversation"
+    ) as mock_format:
+        mock_find.return_value = Path("/tmp/test-session.jsonl")
+        mock_load.return_value = messages
+        mock_resolve.return_value = "TestProject"
+        mock_format.return_value = "Formatted conversation"
+
+        result = view_session_messages("test-session", mode="all", max_messages=100, include_tool_results=True)
+
+        assert result == "Formatted conversation"
+        mock_format.assert_called_once()
+        call_args = mock_format.call_args
+        assert call_args[0][0] == messages
+        assert call_args[0][1] == "test-session"
+        assert call_args[0][2] == "TestProject"
+        assert call_args[1]["max_messages"] == 100
+        assert call_args[1]["include_tool_results"] is True
+
+
+def test_view_session_messages_all_mode_with_user_only():
+    """Test all mode with user_only filter."""
+    messages = [
+        mock_user_message("User msg"),
+        mock_assistant_message("Assistant msg"),
+    ]
+
+    with patch("claude_session_inspector.server.find_session_file") as mock_find, patch(
+        "claude_session_inspector.server.load_session"
+    ) as mock_load, patch("claude_session_inspector.server.resolve_project_name") as mock_resolve, patch(
+        "claude_session_inspector.server.format_conversation"
+    ) as mock_format:
+        mock_find.return_value = Path("/tmp/test-session.jsonl")
+        mock_load.return_value = messages
+        mock_resolve.return_value = "TestProject"
+        mock_format.return_value = "User-only conversation"
+
+        view_session_messages("test-session", mode="all", user_only=True)
+
+        call_args = mock_format.call_args
+        assert call_args[1]["user_only"] is True
+
+
+def test_view_session_messages_invalid_mode():
+    """Test invalid mode returns error message with valid modes listed."""
+    with patch("claude_session_inspector.server.find_session_file") as mock_find:
+        mock_find.return_value = Path("/tmp/test-session.jsonl")
+
+        result = view_session_messages("test-session", mode="invalid_mode")
+
+        assert "Error: Invalid mode" in result
+        assert "invalid_mode" in result
+        assert "first_prompt" in result
+        assert "recent_prompt" in result
+        assert "latest_response" in result
+        assert "all" in result
+
+
+def test_view_session_messages_session_not_found():
+    """Test error when session file not found."""
+    with patch("claude_session_inspector.server.find_session_file", return_value=None):
+        result = view_session_messages("nonexistent-id")
+
+        assert "Error: Session" in result
+        assert "nonexistent-id" in result
+        assert "not found" in result
+
+
+def test_view_session_messages_empty_session():
+    """Test error when session has no messages."""
+    with patch("claude_session_inspector.server.find_session_file") as mock_find, patch(
+        "claude_session_inspector.server.load_session"
+    ) as mock_load:
+        mock_find.return_value = Path("/tmp/test-session.jsonl")
+        mock_load.return_value = []
+
+        result = view_session_messages("test-session")
+
+        assert "no messages" in result
+
+
+def test_view_session_messages_first_prompt_no_user_messages():
+    """Test first_prompt mode when there are no user messages."""
+    messages = [
+        mock_assistant_message("Only assistant message"),
+    ]
+
+    with patch("claude_session_inspector.server.find_session_file") as mock_find, patch(
+        "claude_session_inspector.server.load_session"
+    ) as mock_load, patch("claude_session_inspector.server.resolve_project_name") as mock_resolve:
+        mock_find.return_value = Path("/tmp/test-session.jsonl")
+        mock_load.return_value = messages
+        mock_resolve.return_value = "TestProject"
+
+        result = view_session_messages("test-session", mode="first_prompt")
+
+        assert "no user messages" in result
+
+
+def test_view_session_messages_latest_response_no_assistant():
+    """Test latest_response mode when there are no assistant messages with text."""
+    messages = [
+        mock_user_message("User message"),
+        mock_assistant_message(""),  # Empty text
+    ]
+
+    with patch("claude_session_inspector.server.find_session_file") as mock_find, patch(
+        "claude_session_inspector.server.load_session"
+    ) as mock_load, patch("claude_session_inspector.server.resolve_project_name") as mock_resolve:
+        mock_find.return_value = Path("/tmp/test-session.jsonl")
+        mock_load.return_value = messages
+        mock_resolve.return_value = "TestProject"
+
+        result = view_session_messages("test-session", mode="latest_response")
+
+        assert "no assistant responses" in result
+
+
+def test_view_session_messages_extracts_git_branch():
+    """Test that git_branch is extracted from first user message for all mode."""
+    messages = [
+        mock_user_message("First", git_branch="feature-branch"),
+        mock_assistant_message(),
+    ]
+
+    with patch("claude_session_inspector.server.find_session_file") as mock_find, patch(
+        "claude_session_inspector.server.load_session"
+    ) as mock_load, patch("claude_session_inspector.server.resolve_project_name") as mock_resolve, patch(
+        "claude_session_inspector.server.format_conversation"
+    ) as mock_format:
+        mock_find.return_value = Path("/tmp/test-session.jsonl")
+        mock_load.return_value = messages
+        mock_resolve.return_value = "TestProject"
+        mock_format.return_value = "Formatted"
+
+        view_session_messages("test-session", mode="all")
+
+        call_args = mock_format.call_args
+        assert call_args[0][3] == "feature-branch"
+
+
+def test_view_session_messages_git_branch_none_fallback():
+    """Test that None git_branch is handled in all mode."""
+    messages = [
+        mock_user_message("First", git_branch=None),
+        mock_assistant_message(),
+    ]
+
+    with patch("claude_session_inspector.server.find_session_file") as mock_find, patch(
+        "claude_session_inspector.server.load_session"
+    ) as mock_load, patch("claude_session_inspector.server.resolve_project_name") as mock_resolve, patch(
+        "claude_session_inspector.server.format_conversation"
+    ) as mock_format:
+        mock_find.return_value = Path("/tmp/test-session.jsonl")
+        mock_load.return_value = messages
+        mock_resolve.return_value = "TestProject"
+        mock_format.return_value = "Formatted"
+
+        view_session_messages("test-session", mode="all")
+
+        call_args = mock_format.call_args
+        assert call_args[0][3] is None

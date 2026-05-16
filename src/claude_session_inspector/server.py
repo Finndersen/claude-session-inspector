@@ -4,8 +4,17 @@ from datetime import datetime, timezone
 
 from mcp.server.fastmcp import FastMCP
 
+from claude_session_inspector.formatting import format_conversation, format_single_message
 from claude_session_inspector.search import SearchMatch, search_sessions as _search_sessions
-from claude_session_inspector.sessions import SessionInfo, discover_sessions
+from claude_session_inspector.sessions import (
+    AssistantMessage,
+    SessionInfo,
+    UserMessage,
+    discover_sessions,
+    find_session_file,
+    load_session,
+    resolve_project_name,
+)
 
 mcp = FastMCP("claude-session-inspector")
 
@@ -107,6 +116,80 @@ def search_sessions(query: str, project: str | None = None, max_results: int = 1
     separator = "\n" + "─" * 34 + "\n"
 
     return header + separator + separator.join(blocks) + "\n" + "─" * 34
+
+
+@mcp.tool()
+def view_session_messages(
+    session_id: str,
+    mode: str = "all",
+    max_messages: int = 50,
+    include_tool_results: bool = False,
+    user_only: bool = False,
+) -> str:
+    """View messages from a Claude Code session directly.
+
+    Args:
+        session_id: Session UUID to view
+        mode: Viewing mode - 'first_prompt', 'recent_prompt', 'latest_response', or 'all'
+        max_messages: Max messages to return in 'all' mode (default: 50)
+        include_tool_results: Include tool result content in output (default: false)
+        user_only: Only show user messages (default: false)
+
+    Returns:
+        Formatted message output
+    """
+    valid_modes = ["first_prompt", "recent_prompt", "latest_response", "all"]
+    if mode not in valid_modes:
+        return f"Error: Invalid mode '{mode}'. Valid modes are: {', '.join(valid_modes)}"
+
+    session_file = find_session_file(session_id)
+    if session_file is None:
+        return f"Error: Session '{session_id}' not found."
+
+    try:
+        messages = load_session(session_file)
+    except OSError as err:
+        return f"Error: Could not read session '{session_id}': {err}"
+
+    if not messages:
+        return f"Session '{session_id}' has no messages."
+
+    project_name = resolve_project_name(session_file.parent.name)
+
+    if mode == "first_prompt":
+        for msg in messages:
+            if isinstance(msg, UserMessage) and msg.text.strip():
+                return format_single_message(msg, session_id, project_name, "first_prompt")
+        return f"Session '{session_id}' has no user messages."
+
+    elif mode == "recent_prompt":
+        for msg in reversed(messages):
+            if isinstance(msg, UserMessage) and msg.text.strip():
+                return format_single_message(msg, session_id, project_name, "recent_prompt")
+        return f"Session '{session_id}' has no user messages."
+
+    elif mode == "latest_response":
+        for msg in reversed(messages):
+            if isinstance(msg, AssistantMessage) and msg.text:
+                return format_single_message(msg, session_id, project_name, "latest_response")
+        return f"Session '{session_id}' has no assistant responses."
+
+    else:  # mode == "all"
+        git_branch: str | None = None
+        for msg in messages:
+            if isinstance(msg, UserMessage) and msg.git_branch:
+                git_branch = msg.git_branch
+                break
+
+        return format_conversation(
+            messages,
+            session_id,
+            project_name,
+            git_branch,
+            max_messages=max_messages,
+            include_tool_results=include_tool_results,
+            user_only=user_only,
+        )
 
 
 def main() -> None:
