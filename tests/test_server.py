@@ -48,14 +48,14 @@ def mock_session(
 
 def test_list_sessions_empty_no_filter():
     """Test empty results without filter."""
-    with patch("claude_session_inspector.server.discover_sessions", return_value=[]):
+    with patch("claude_session_inspector.server.discover_sessions", return_value=([], 0)):
         result = list_sessions()
         assert result == "No sessions found."
 
 
 def test_list_sessions_empty_with_filter():
     """Test empty results with filter."""
-    with patch("claude_session_inspector.server.discover_sessions", return_value=[]):
+    with patch("claude_session_inspector.server.discover_sessions", return_value=([], 0)):
         result = list_sessions(project="NonExistent")
         assert result == "No sessions found matching 'NonExistent'."
 
@@ -64,7 +64,7 @@ def test_list_sessions_single():
     """Test output with a single session."""
     session = mock_session(session_id="abc123")
     with patch(
-        "claude_session_inspector.server.discover_sessions", return_value=[session]
+        "claude_session_inspector.server.discover_sessions", return_value=([session], 1)
     ):
         result = list_sessions()
         assert "Showing 1 of 1 sessions" in result
@@ -83,7 +83,7 @@ def test_list_sessions_multiple():
         mock_session(session_id="ccc", project_name="Project3"),
     ]
     with patch(
-        "claude_session_inspector.server.discover_sessions", return_value=sessions
+        "claude_session_inspector.server.discover_sessions", return_value=(sessions, 3)
     ):
         result = list_sessions()
         assert "Showing 3 of 3 sessions" in result
@@ -96,33 +96,33 @@ def test_list_sessions_plural_vs_singular():
     """Test header line shows correct counts."""
     with patch(
         "claude_session_inspector.server.discover_sessions",
-        return_value=[mock_session()],
+        return_value=([mock_session()], 1),
     ):
         result = list_sessions()
         assert "Showing 1 of 1 sessions" in result
 
     sessions = [mock_session(session_id=f"id{i}") for i in range(2)]
     with patch(
-        "claude_session_inspector.server.discover_sessions", return_value=sessions
+        "claude_session_inspector.server.discover_sessions", return_value=(sessions, 2)
     ):
         result = list_sessions()
         assert "Showing 2 of 2 sessions" in result
 
 
 def test_list_sessions_with_project_filter():
-    """Test that project filter is passed to discover_sessions."""
+    """Test that project filter and limit are passed to discover_sessions."""
     with patch(
-        "claude_session_inspector.server.discover_sessions", return_value=[]
+        "claude_session_inspector.server.discover_sessions", return_value=([], 0)
     ) as mock_discover:
         list_sessions(project="MyProject")
-        mock_discover.assert_called_once_with(project_filter="MyProject")
+        mock_discover.assert_called_once_with(project_filter="MyProject", limit=20)
 
 
 def test_list_sessions_none_timestamps():
     """Test handling of None timestamps."""
     session = mock_session(first_timestamp=None, last_timestamp=None)
     with patch(
-        "claude_session_inspector.server.discover_sessions", return_value=[session]
+        "claude_session_inspector.server.discover_sessions", return_value=([session], 1)
     ):
         result = list_sessions()
         assert result.count("unknown") >= 2
@@ -132,7 +132,7 @@ def test_list_sessions_none_branch():
     """Test handling of None git_branch."""
     session = mock_session(git_branch=None)
     with patch(
-        "claude_session_inspector.server.discover_sessions", return_value=[session]
+        "claude_session_inspector.server.discover_sessions", return_value=([session], 1)
     ):
         result = list_sessions()
         assert "unknown" in result
@@ -143,7 +143,7 @@ def test_list_sessions_first_prompt_truncated():
     prompt = "x" * 200
     session = mock_session(first_prompt=prompt)
     with patch(
-        "claude_session_inspector.server.discover_sessions", return_value=[session]
+        "claude_session_inspector.server.discover_sessions", return_value=([session], 1)
     ):
         result = list_sessions()
         assert "x" * 80 + "..." in result
@@ -154,7 +154,7 @@ def test_list_sessions_table_columns():
     """Test that table header contains expected columns."""
     session = mock_session()
     with patch(
-        "claude_session_inspector.server.discover_sessions", return_value=[session]
+        "claude_session_inspector.server.discover_sessions", return_value=([session], 1)
     ):
         result = list_sessions()
         assert "session_id" in result

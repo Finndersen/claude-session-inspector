@@ -223,80 +223,59 @@ class SessionInfo:
     file_size_bytes: int
 
 
-def _read_last_lines(file_path: Path, n: int = 20) -> list[str]:
-    """Read the last n lines of a file without loading the entire file."""
-    with file_path.open("rb") as f:
-        f.seek(0, 2)
-        size = f.tell()
-        read_size = min(size, 65536)
-        f.seek(max(0, size - read_size))
-        data = f.read(read_size).decode("utf-8", errors="replace")
-    return [line for line in data.splitlines() if line.strip()][-n:]
+def _read_session_details(
+    session_file: Path,
+) -> tuple[str, datetime | None, str | None, str | None]:
+    """Read first prompt, timestamp, branch, and cwd from the first lines of a session file.
 
+    Returns (first_prompt, first_timestamp, git_branch, cwd).
+    Only opens the file once and stops at the first real user message.
+    """
+    first_prompt = ""
+    first_timestamp: datetime | None = None
+    git_branch: str | None = None
+    cwd: str | None = None
 
-def get_session_metadata(session_file: Path, project_dir: str) -> SessionInfo | None:
-    """Extract metadata from a session file by reading only the first and last few lines."""
-    try:
-        if not session_file.is_file():
-            return None
-
-        session_id = session_file.stem
-
-        # Read first lines for first user message info
-        first_prompt = ""
-        first_timestamp: datetime | None = None
-        git_branch: str | None = None
-        cwd: str | None = None
-
-        with session_file.open("r", errors="replace") as f:
-            for _ in range(20):
-                line = f.readline()
-                if not line:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-
-                if entry.get("type") != "user":
-                    continue
-                if entry.get("isMeta") or entry.get("isCompactSummary"):
-                    continue
-
-                try:
-                    ts_raw = entry.get("timestamp", "")
-                    first_timestamp = datetime.fromisoformat(ts_raw) if ts_raw else None
-                except (ValueError, TypeError):
-                    first_timestamp = None
-
-                content_raw = entry.get("message", {}).get("content", "")
-                first_prompt = _extract_text_from_content(content_raw)[:200]
-                git_branch = entry.get("gitBranch")
-                cwd = entry.get("cwd")
+    with session_file.open("r", errors="replace") as f:
+        for _ in range(20):
+            line = f.readline()
+            if not line:
                 break
-
-        # Read last lines for last_timestamp
-        last_timestamp: datetime | None = None
-        for line in reversed(_read_last_lines(session_file, 20)):
+            line = line.strip()
+            if not line:
+                continue
             try:
                 entry = json.loads(line)
             except (json.JSONDecodeError, ValueError):
                 continue
-            if entry.get("type") not in ("user", "assistant"):
+            if entry.get("type") != "user":
+                continue
+            if entry.get("isMeta") or entry.get("isCompactSummary"):
                 continue
             try:
                 ts_raw = entry.get("timestamp", "")
-                if ts_raw:
-                    last_timestamp = datetime.fromisoformat(ts_raw)
-                    break
+                first_timestamp = datetime.fromisoformat(ts_raw) if ts_raw else None
             except (ValueError, TypeError):
-                continue
+                first_timestamp = None
+            content_raw = entry.get("message", {}).get("content", "")
+            first_prompt = _extract_text_from_content(content_raw)[:200]
+            git_branch = entry.get("gitBranch")
+            cwd = entry.get("cwd")
+            break
 
+    return first_prompt, first_timestamp, git_branch, cwd
+
+
+def get_session_metadata(session_file: Path, project_dir: str) -> SessionInfo | None:
+    """Extract full metadata from a session file (used by search_sessions)."""
+    try:
+        stat = session_file.stat()
+        if not stat.st_size:
+            return None
+        first_prompt, first_timestamp, git_branch, cwd = _read_session_details(session_file)
+        last_timestamp = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
         return SessionInfo(
-            session_id=session_id,
+            session_id=session_file.stem,
             project_name=resolve_project_name(project_dir),
             project_dir=project_dir,
             file_path=session_file,
@@ -305,42 +284,69 @@ def get_session_metadata(session_file: Path, project_dir: str) -> SessionInfo | 
             last_timestamp=last_timestamp,
             git_branch=git_branch,
             cwd=cwd,
-            file_size_bytes=session_file.stat().st_size,
+            file_size_bytes=stat.st_size,
         )
     except OSError:
         return None
 
 
-def discover_sessions(project_filter: str | None = None) -> list[SessionInfo]:
-    """Scan the sessions directory and return metadata for all sessions.
+def discover_sessions(
+    project_filter: str | None = None,
+    limit: int | None = None,
+) -> tuple[list[SessionInfo], int]:
+    """Scan sessions directory and return (sessions, total_matching).
 
-    Results are sorted by last_timestamp descending (sessions with no timestamp last).
-    If project_filter is provided, only sessions whose friendly project name contains
-    the filter string (case-insensitive) are returned.
+    Two-phase: stat() all files first (no opens), sort and slice by mtime, then read
+    details only for the retained files. This means file I/O scales with `limit`, not
+    with the total number of sessions on disk.
+
+    Returns a tuple of (sessions sorted by mtime descending, total matching file count).
     """
     sessions_dir = get_sessions_dir()
     if not sessions_dir.exists():
-        return []
+        return [], 0
 
-    results: list[SessionInfo] = []
+    # Phase 1: stat() only — no file opens
+    candidates: list[tuple[float, int, Path, str, str]] = []
     for session_file in sessions_dir.glob("*/*.jsonl"):
         project_dir = session_file.parent.name
-        info = get_session_metadata(session_file, project_dir)
-        if info is None:
+        project_name = resolve_project_name(project_dir)
+        if project_filter and project_filter.lower() not in project_name.lower():
             continue
-        if project_filter and project_filter.lower() not in info.project_name.lower():
+        try:
+            st = session_file.stat()
+        except OSError:
             continue
-        results.append(info)
+        candidates.append((st.st_mtime, st.st_size, session_file, project_dir, project_name))
 
-    def _sort_key(s: SessionInfo) -> datetime:
-        if s.last_timestamp is None:
-            return datetime.min.replace(tzinfo=timezone.utc)
-        if s.last_timestamp.tzinfo is None:
-            return s.last_timestamp.replace(tzinfo=timezone.utc)
-        return s.last_timestamp
+    total = len(candidates)
 
-    results.sort(key=_sort_key, reverse=True)
-    return results
+    # Sort by mtime descending and apply limit before any file opens
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    if limit is not None:
+        candidates = candidates[:limit]
+
+    # Phase 2: read first ~20 lines only for the retained files
+    results: list[SessionInfo] = []
+    for mtime, size, session_file, project_dir, project_name in candidates:
+        try:
+            first_prompt, first_timestamp, git_branch, cwd = _read_session_details(session_file)
+        except OSError:
+            continue
+        results.append(SessionInfo(
+            session_id=session_file.stem,
+            project_name=project_name,
+            project_dir=project_dir,
+            file_path=session_file,
+            first_prompt=first_prompt,
+            first_timestamp=first_timestamp,
+            last_timestamp=datetime.fromtimestamp(mtime, tz=timezone.utc),
+            git_branch=git_branch,
+            cwd=cwd,
+            file_size_bytes=size,
+        ))
+
+    return results, total
 
 
 def find_session_file(session_id: str) -> Path | None:

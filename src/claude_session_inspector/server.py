@@ -80,22 +80,18 @@ def list_sessions(project: str | None = None, max_results: int = 20) -> str:
                      reached there may be more sessions — use the project filter or
                      search_sessions to narrow results.
     """
-    sessions = discover_sessions(project_filter=project)
+    sessions, total = discover_sessions(project_filter=project, limit=max_results)
 
     if not sessions:
         if project:
             return f"No sessions found matching '{project}'."
         return "No sessions found."
 
-    total = len(sessions)
-    truncated = total > max_results
-    sessions = sessions[:max_results]
-
     header = f"Showing {len(sessions)} of {total} sessions (most recent first):\n"
     table = _format_sessions_table(sessions)
 
     suffix = ""
-    if truncated:
+    if total > max_results:
         suffix = (
             f"\n\n[Results truncated at {max_results}. Use the project= filter to narrow by "
             f"project name, or use search_sessions to find sessions matching a specific topic.]"
