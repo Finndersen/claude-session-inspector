@@ -3,7 +3,8 @@
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from claude_session_inspector.server import list_sessions
+from claude_session_inspector.search import SearchMatch
+from claude_session_inspector.server import list_sessions, search_sessions
 from claude_session_inspector.sessions import SessionInfo
 from pathlib import Path
 
@@ -149,6 +150,139 @@ def test_list_sessions_all_fields_present():
             "Messages:",
             "Directory:",
             "First prompt:",
+        ]
+        for field in required_fields:
+            assert field in result, f"Missing field: {field}"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# search_sessions tests
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_search_sessions_empty_results():
+    """Test search with no matches."""
+    with patch("claude_session_inspector.server._search_sessions", return_value=[]):
+        result = search_sessions("nonexistent")
+        assert 'No matches found for "nonexistent"' in result
+
+
+def test_search_sessions_single_result():
+    """Test search with a single match."""
+    match = SearchMatch(
+        session_id="abc123",
+        project_name="TestProject",
+        match_count=5,
+        snippets=["first match", "second match"],
+        first_prompt="Help me implement a feature",
+    )
+    with patch("claude_session_inspector.server._search_sessions", return_value=[match]):
+        result = search_sessions("test")
+        assert 'Found "test" in 1 session' in result
+        assert "Session: abc123" in result
+        assert "Project: TestProject" in result
+        assert "Matches: 5" in result
+        assert "First prompt: Help me implement a feature" in result
+        assert "first match" in result
+        assert "second match" in result
+
+
+def test_search_sessions_multiple_results():
+    """Test search with multiple matches."""
+    matches = [
+        SearchMatch(
+            session_id="session1",
+            project_name="Project1",
+            match_count=10,
+            snippets=["match1"],
+            first_prompt="prompt1",
+        ),
+        SearchMatch(
+            session_id="session2",
+            project_name="Project2",
+            match_count=5,
+            snippets=["match2"],
+            first_prompt="prompt2",
+        ),
+    ]
+    with patch("claude_session_inspector.server._search_sessions", return_value=matches):
+        result = search_sessions("test")
+        assert 'Found "test" in 2 sessions' in result
+        assert "Session: session1" in result
+        assert "Session: session2" in result
+
+
+def test_search_sessions_plural_vs_singular():
+    """Test correct singular/plural in count header."""
+    # Single
+    with patch("claude_session_inspector.server._search_sessions", return_value=[
+        SearchMatch("s", "P", 1, [], "")
+    ]):
+        result = search_sessions("test")
+        assert 'in 1 session' in result
+
+    # Multiple
+    with patch("claude_session_inspector.server._search_sessions", return_value=[
+        SearchMatch("s1", "P", 1, [], ""),
+        SearchMatch("s2", "P", 1, [], ""),
+    ]):
+        result = search_sessions("test")
+        assert 'in 2 sessions' in result
+
+
+def test_search_sessions_with_project_filter():
+    """Test that project filter is passed to _search_sessions."""
+    with patch("claude_session_inspector.server._search_sessions", return_value=[]) as mock_search:
+        search_sessions("test", project="MyProject")
+        mock_search.assert_called_once_with("test", project="MyProject", max_results=10)
+
+
+def test_search_sessions_with_max_results():
+    """Test that max_results parameter is passed."""
+    with patch("claude_session_inspector.server._search_sessions", return_value=[]) as mock_search:
+        search_sessions("test", max_results=20)
+        mock_search.assert_called_once_with("test", project=None, max_results=20)
+
+
+def test_search_sessions_rg_not_found_error():
+    """Test handling of RuntimeError from ripgrep not being installed."""
+    with patch("claude_session_inspector.server._search_sessions") as mock_search:
+        mock_search.side_effect = RuntimeError("ripgrep (rg) is not installed. Please install ripgrep to use search_sessions.")
+        result = search_sessions("test")
+        assert "ripgrep (rg) is not installed" in result
+
+
+def test_search_sessions_empty_first_prompt():
+    """Test handling of empty first_prompt."""
+    match = SearchMatch(
+        session_id="s",
+        project_name="P",
+        match_count=1,
+        snippets=["match"],
+        first_prompt="",
+    )
+    with patch("claude_session_inspector.server._search_sessions", return_value=[match]):
+        result = search_sessions("test")
+        assert "First prompt: (empty)" in result
+
+
+def test_search_sessions_all_fields_present():
+    """Test that all expected fields are in the output."""
+    match = SearchMatch(
+        session_id="abc",
+        project_name="TestProject",
+        match_count=3,
+        snippets=["snippet1", "snippet2"],
+        first_prompt="Test prompt",
+    )
+    with patch("claude_session_inspector.server._search_sessions", return_value=[match]):
+        result = search_sessions("query")
+        required_fields = [
+            "Session:",
+            "Project:",
+            "Matches:",
+            "First prompt:",
+            "Matching snippets:",
         ]
         for field in required_fields:
             assert field in result, f"Missing field: {field}"
