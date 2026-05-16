@@ -239,6 +239,11 @@ def test_load_session_skip_sidechain_false(tmp_path: Path):
     assert messages[1].uuid == "u-side"
 
 
+def test_load_session_file_not_found(tmp_path: Path):
+    with pytest.raises(FileNotFoundError):
+        load_session(tmp_path / "nonexistent.jsonl")
+
+
 # ---------------------------------------------------------------------------
 # resolve_project_name
 # ---------------------------------------------------------------------------

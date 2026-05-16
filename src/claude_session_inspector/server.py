@@ -1,6 +1,6 @@
 """MCP server for Claude Session Inspector."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from mcp.server.fastmcp import FastMCP
 
@@ -8,28 +8,35 @@ from claude_session_inspector.sessions import SessionInfo, discover_sessions
 
 mcp = FastMCP("claude-session-inspector")
 
-SEPARATOR = "──────────────────────────────────"
 
-
-def _format_timestamp(ts: datetime | None) -> str:
-    if ts is None:
+def _format_timestamp(dt: datetime | None) -> str:
+    """Format a datetime for display, or return 'unknown' if None."""
+    if dt is None:
         return "unknown"
-    return ts.strftime("%Y-%m-%d %H:%M UTC")
+    # Format as: 2026-05-16 10:30 UTC
+    if dt.tzinfo is None:
+        # Assume UTC if naive
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.strftime("%Y-%m-%d %H:%M UTC")
 
 
-def _format_session(info: SessionInfo) -> str:
-    lines = [
-        SEPARATOR,
-        f"Session: {info.session_id}",
-        f"Project: {info.project_name}",
-        f"Branch: {info.git_branch or 'unknown'}",
-        f"Last active: {_format_timestamp(info.last_timestamp)}",
-        f"Started: {_format_timestamp(info.first_timestamp)}",
-        f"Messages: {info.user_message_count} user / {info.assistant_message_count} assistant",
-        f"Directory: {info.cwd or info.project_dir}",
-        f'First prompt: "{info.first_prompt}"',
-    ]
-    return "\n".join(lines)
+def _format_session(session: SessionInfo) -> str:
+    """Format a single session as a block."""
+    branch = session.git_branch or "unknown"
+    cwd = session.cwd or str(session.file_path.parent)
+    first_prompt = session.first_prompt if session.first_prompt else "(empty)"
+
+    user_count = session.user_message_count
+    assistant_count = session.assistant_message_count
+
+    return f"""Session: {session.session_id}
+Project: {session.project_name}
+Branch: {branch}
+Last active: {_format_timestamp(session.last_timestamp)}
+Started: {_format_timestamp(session.first_timestamp)}
+Messages: {user_count} user / {assistant_count} assistant
+Directory: {cwd}
+First prompt: {first_prompt}"""
 
 
 @mcp.tool()
@@ -49,10 +56,20 @@ def list_sessions(project: str | None = None) -> str:
             return f"No sessions found matching '{project}'."
         return "No sessions found."
 
-    header = f"Found {len(sessions)} session{'s' if len(sessions) != 1 else ''} (showing most recent first):\n"
-    blocks = "\n".join(_format_session(s) for s in sessions)
-    return header + "\n" + blocks + "\n" + SEPARATOR
+    count = len(sessions)
+    count_text = "session" if count == 1 else "sessions"
+    header = f"Found {count} {count_text} (showing most recent first):\n"
+
+    blocks = [_format_session(s) for s in sessions]
+    separator = "\n" + "─" * 34 + "\n"
+
+    return header + separator + separator.join(blocks) + "\n" + "─" * 34
 
 
 def main() -> None:
+    """Main entry point for the MCP server."""
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

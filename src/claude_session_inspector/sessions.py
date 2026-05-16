@@ -340,7 +340,14 @@ def discover_sessions(project_filter: str | None = None) -> list[SessionInfo]:
             continue
         results.append(info)
 
-    results.sort(key=lambda s: s.last_timestamp or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    def _sort_key(s: SessionInfo) -> datetime:
+        if s.last_timestamp is None:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        if s.last_timestamp.tzinfo is None:
+            return s.last_timestamp.replace(tzinfo=timezone.utc)
+        return s.last_timestamp
+
+    results.sort(key=_sort_key, reverse=True)
     return results
 
 
