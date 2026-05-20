@@ -7,26 +7,27 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from claude_session_inspector.formatting import format_conversation
-from claude_session_inspector.inspection import inspect_session as inspect_session_impl
 from claude_session_inspector.search import SearchMatch, search_sessions as _search_sessions_impl
 from claude_session_inspector.sessions import (
+    ActiveInfo,
     SessionInfo,
     UserMessage,
     discover_sessions,
     find_session_file,
     load_session,
-    resolve_project_name,
 )
 
 mcp = FastMCP(
-    "claude-session-inspector",
+    "claude-introspect",
     instructions=(
-        "Use these tools to see the user's work history across Claude Code projects, "
-        "retrieve context from prior sessions, or answer questions about past Claude Code conversations. "
-        "list_sessions discovers recent activity across all projects. "
-        "search_sessions finds sessions by keyword or topic. "
-        "view_session_messages reads the raw transcript of a session. "
-        "inspect_session uses AI to summarise or answer a specific question about a session."
+        "These tools let you discover other Claude Code sessions — what the user has been working on, "
+        "what other Claude agents are doing — and extract context from them. "
+        "Use this to pick up where a prior session left off, avoid duplicating work already done, or "
+        "pull in decisions and implementation details from related conversations before starting a task.\n\n"
+        "To summarize or answer questions about a specific session: always spawn a session-inspector "
+        "sub-agent (via Agent tool with subagent_type='session-inspector') rather than reading raw "
+        "session content yourself. The sub-agent uses slicing and filtering to gather exactly what it "
+        "needs efficiently."
     ),
 )
 
@@ -35,28 +36,58 @@ def _format_timestamp(dt: datetime | None) -> str:
     """Format a datetime for display, or return 'unknown' if None."""
     if dt is None:
         return "unknown"
-    # Format as: 2026-05-16 10:30 UTC
     if dt.tzinfo is None:
-        # Assume UTC if naive
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.strftime("%Y-%m-%d %H:%M UTC")
 
 
-def _format_sessions_table(sessions: list[SessionInfo]) -> str:
-    """Format a list of sessions as a pipe-separated table."""
-    header = "session_id | project | branch | last_active | started | size_kb | first_prompt"
+def _current_time_str() -> str:
+    return datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _format_session_row_common(s: SessionInfo) -> tuple[str, str, str, str, float, str, str]:
+    """Return (working_dir, branch, last_active, started, size_kb, prompt, summary)."""
+    branch = s.git_branch or "unknown"
+    last_active = _format_timestamp(s.last_timestamp)
+    started = _format_timestamp(s.first_timestamp)
+    size_kb = round(s.file_size_bytes / 1024, 1)
+    prompt = (s.first_prompt or "").replace("|", " ").replace("\n", " ").strip()
+    if len(prompt) > 300:
+        prompt = prompt[:300] + "..."
+    summary = (s.session_summary or "").replace("|", " ").replace("\n", " ").strip()
+    working_dir = (s.cwd or s.project_dir).replace("|", " ")
+    return working_dir, branch, last_active, started, size_kb, prompt, summary
+
+
+def _format_active_sessions_table(sessions: list[SessionInfo]) -> str:
+    """Format active sessions as a pipe-separated table with live-process columns."""
+    header = (
+        "session_id | name | status | waiting_for | pid | working_dir | branch"
+        " | last_active | started | size_kb | events | first_prompt | session_summary"
+    )
     rows = [header]
     for s in sessions:
-        branch = s.git_branch or "unknown"
-        last_active = _format_timestamp(s.last_timestamp)
-        started = _format_timestamp(s.first_timestamp)
-        size_kb = round(s.file_size_bytes / 1024, 1)
-        prompt = (s.first_prompt or "").replace("|", " ").replace("\n", " ").strip()
-        if len(prompt) > 300:
-            prompt = prompt[:300] + "..."
+        active: ActiveInfo = s.active  # type: ignore[assignment]  # caller guarantees non-None
+        working_dir, branch, last_active, started, size_kb, prompt, summary = _format_session_row_common(s)
+        name = (active.name or "").replace("|", " ")
+        waiting_for = (active.waiting_for or "").replace("|", " ")
         rows.append(
-            f"{s.session_id} | {s.project_name} | {branch} | {last_active} | {started}"
-            f" | {size_kb} | {prompt}"
+            f"{s.session_id} | {name} | {active.status} | {waiting_for} | {active.pid}"
+            f" | {working_dir} | {branch} | {last_active} | {started}"
+            f" | {size_kb} | {s.event_count} | {prompt} | {summary}"
+        )
+    return "\n".join(rows)
+
+
+def _format_historical_sessions_table(sessions: list[SessionInfo]) -> str:
+    """Format historical (non-active) sessions as a pipe-separated table."""
+    header = "session_id | working_dir | branch | last_active | started | size_kb | events | first_prompt | session_summary"
+    rows = [header]
+    for s in sessions:
+        working_dir, branch, last_active, started, size_kb, prompt, summary = _format_session_row_common(s)
+        rows.append(
+            f"{s.session_id} | {working_dir} | {branch} | {last_active} | {started}"
+            f" | {size_kb} | {s.event_count} | {prompt} | {summary}"
         )
     return "\n".join(rows)
 
@@ -65,9 +96,11 @@ def _format_search_result(match: SearchMatch) -> str:
     """Format a single search match as a block."""
     first_prompt = match.first_prompt if match.first_prompt else "(empty)"
     result = f"""Session: {match.session_id}
-Project: {match.project_name}
+Working dir: {match.working_dir or "(unknown)"}
 Matches: {match.match_count}
 First prompt: {first_prompt}"""
+    if match.session_summary:
+        result += f"\nSession summary: {match.session_summary}"
     if match.snippets:
         snippets_text = "\n".join(f"  > {s}" for s in match.snippets)
         result += f"\n\nMatching snippets:\n{snippets_text}"
@@ -78,13 +111,20 @@ First prompt: {first_prompt}"""
 def list_sessions(
     project: Annotated[
         str | None,
-        Field(description="Project name filter (case-insensitive substring match)."),
+        Field(
+            description=(
+                "Working directory filter: case-insensitive substring match against the session's "
+                "working directory path. Accepts a full path (e.g. '/Users/user/projects/myapp') "
+                "or a partial name (e.g. 'myapp')."
+            )
+        ),
     ] = None,
     max_results: Annotated[
         int,
         Field(
             description=(
-                "Maximum sessions to return (default: 20). If the limit is reached there "
+                "Maximum historical sessions to return (default: 20). Active sessions are always "
+                "shown in full, independent of this limit. If the historical limit is reached there "
                 "may be more — narrow with project= or use search_sessions to find sessions "
                 "matching a specific topic."
             )
@@ -93,31 +133,47 @@ def list_sessions(
 ) -> str:
     """Browse recent Claude Code sessions sorted by last activity.
 
+    Returns two sections: currently-running sessions (with name/status/waiting_for/pid) followed
+    by recent historical sessions. Active sessions are always shown in full; max_results only
+    caps the historical section.
+
     Use this whenever you need to discover what the user has been working on or survey recent
-    Claude agent activity across projects. Returns a table of sessions with metadata including
-    project, branch, timestamps, file size, and the opening prompt.
+    Claude agent activity across projects. Each session row includes working_dir, branch,
+    timestamps, file size, event count, first_prompt, and session_summary (a brief AI-written
+    recap from when the session was last backgrounded).
 
     To search session *content* for a specific keyword, function name, or error message, use
     the search_sessions tool instead.
     """
-    sessions, total = discover_sessions(project_filter=project, limit=max_results)
+    sessions, total_historical = discover_sessions(project_filter=project, limit=max_results)
 
     if not sessions:
         if project:
             return f"No sessions found matching '{project}'."
         return "No sessions found."
 
-    header = f"Showing {len(sessions)} of {total} sessions (most recent first):\n"
-    table = _format_sessions_table(sessions)
+    active_sessions = [s for s in sessions if s.active is not None]
+    historical_sessions = [s for s in sessions if s.active is None]
 
-    suffix = ""
-    if total > max_results:
-        suffix = (
-            f"\n\n[Results truncated at {max_results}. Use the project= filter to narrow by "
-            f"project name, or use search_sessions to find sessions matching a specific topic.]"
+    parts: list[str] = [f"Current time: {_current_time_str()}"]
+
+    if active_sessions:
+        parts.append(f"\n## Active sessions ({len(active_sessions)})")
+        parts.append(_format_active_sessions_table(active_sessions))
+
+    if historical_sessions:
+        parts.append(
+            f"\n## Recent sessions (showing {len(historical_sessions)} of {total_historical})"
         )
+        parts.append(_format_historical_sessions_table(historical_sessions))
+        if total_historical > max_results:
+            parts.append(
+                f"\n[Results truncated at {max_results}. Use the project= filter (accepts a full "
+                f"working directory path or a partial name) or use search_sessions to find sessions "
+                f"matching a specific topic.]"
+            )
 
-    return header + table + suffix
+    return "\n".join(parts)
 
 
 @mcp.tool()
@@ -135,7 +191,13 @@ def search_sessions(
     ],
     project: Annotated[
         str | None,
-        Field(description="Project name filter (case-insensitive substring match)."),
+        Field(
+            description=(
+                "Working directory filter: case-insensitive substring match against the session's "
+                "working directory path. Accepts a full path (e.g. '/Users/user/projects/myapp') "
+                "or a partial name (e.g. 'myapp')."
+            )
+        ),
     ] = None,
     max_results: Annotated[
         int,
@@ -170,15 +232,12 @@ def search_sessions(
 
     count = len(matches)
     count_text = "session" if count == 1 else "sessions"
-    header = f'Found "{query}" in {count} {count_text}:\n'
+    header = f'Current time: {_current_time_str()}\nFound "{query}" in {count} {count_text}:\n'
 
     blocks = [_format_search_result(m) for m in matches]
     separator = "\n" + "─" * 34 + "\n"
 
     return header + separator + separator.join(blocks) + "\n" + "─" * 34
-
-
-_VALID_MESSAGE_TYPES = {"user", "assistant", "tool_calls", "tool_results"}
 
 
 @mcp.tool()
@@ -199,44 +258,25 @@ def view_session_messages(
             description="End of message slice (exclusive, negative ok). None = to end.",
         ),
     ] = None,
-    message_type: Annotated[
-        list[str] | None,
-        Field(
-            description=(
-                "Filter messages before slicing. Allowed values: 'user', 'assistant', "
-                "'tool_calls' (assistant messages with tool calls), "
-                "'tool_results' (user messages with tool results). "
-                "Multiple values = OR. None = no filter."
-            )
-        ),
-    ] = None,
-    max_tool_result_length: Annotated[
+    tool_content_length: Annotated[
         int,
         Field(
             description=(
-                "Max characters of tool result content to include per result (default: 200). "
-                "Set to 0 to omit content entirely — tool call indicators are always shown."
+                "Max characters of tool call input params and tool result content (default: 200). "
+                "Set to 0 to show call/result indicators only with no content — all tool calls "
+                "and tool results are always shown regardless of this setting."
             )
         ),
     ] = 200,
 ) -> str:
     """Read the conversation messages from a specific Claude Code session.
 
-    Use this to retrieve the actual content of a session once you have its ID (from
-    list_sessions). Supports Python-style index slicing (negative indices ok) and filtering
-    by message type. For example, start_index=-3 to get the last 3 messages, or
-    message_type=['user'] to see only user messages. Prefer inspect_session when you want
-    an AI summary rather than the raw transcript.
+    Returns all user messages, assistant messages, tool calls, and tool results.
+    Supports Python-style index slicing (negative indices ok). For example, start_index=-3
+    to get the last 3 messages. Use tool_content_length=0 to suppress tool input/result
+    content while keeping call and result indicators. For large sessions or when you need a
+    synthesised answer, spawn a session-inspector sub-agent instead of reading content directly.
     """
-    if message_type is not None:
-        invalid = [t for t in message_type if t not in _VALID_MESSAGE_TYPES]
-        if invalid:
-            valid_list = ", ".join(sorted(_VALID_MESSAGE_TYPES))
-            return (
-                f"Error: Invalid message_type value(s): {', '.join(repr(t) for t in invalid)}. "
-                f"Valid values: {valid_list}"
-            )
-
     session_file = find_session_file(session_id)
     if session_file is None:
         return f"Error: Session '{session_id}' not found."
@@ -249,52 +289,23 @@ def view_session_messages(
     if not messages:
         return f"Session '{session_id}' has no messages."
 
-    project_name = resolve_project_name(session_file.parent.name)
-
+    working_dir: str | None = None
     git_branch: str | None = None
     for msg in messages:
         if isinstance(msg, UserMessage) and msg.git_branch:
             git_branch = msg.git_branch
+            working_dir = msg.cwd
             break
 
     return format_conversation(
         messages,
         session_id,
-        project_name,
+        working_dir or session_file.parent.name,
         git_branch,
         start_index=start_index,
         end_index=end_index,
-        message_type=message_type,
-        max_tool_result_length=max_tool_result_length,
+        tool_content_length=tool_content_length,
     )
-
-
-@mcp.tool()
-async def inspect_session(
-    session_id: Annotated[str, Field(description="Session UUID (from list_sessions).")],
-    question: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Question to ask about the session. If omitted, returns a comprehensive summary "
-                "covering topics discussed, decisions made, problems solved, and current status."
-            )
-        ),
-    ] = None,
-) -> str:
-    """Ask a natural-language question about a Claude Code session, or get an AI summary.
-
-    Use this when you want a synthesised answer about a session rather than reading the raw
-    transcript yourself — for example, "what was decided about the auth approach?", "what
-    files were changed?", "what is the current status of this work?", or just omit the question
-    to get a comprehensive summary. Internally sends the session to Claude Haiku for analysis,
-    so it handles long sessions well and returns a focused answer. Prefer view_session_messages
-    if you need the verbatim conversation content; prefer this tool when you need a quick
-    understanding of what happened or want to extract a specific piece of information efficiently.
-
-    Requires the claude CLI to be installed and authenticated.
-    """
-    return await inspect_session_impl(session_id, question)
 
 
 def main() -> None:
