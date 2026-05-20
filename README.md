@@ -20,11 +20,14 @@ The plugin also bundles a `session-inspector` sub-agent type. When a session nee
 
 ### As a Claude Code plugin (recommended)
 
-Install via Claude Code's plugin system — registers both the MCP server and the `session-inspector` sub-agent type automatically:
+Install via Claude Code's plugin system — registers both the MCP server and the `session-inspector` sub-agent type automatically. The repo doubles as its own single-plugin marketplace, so add it as a marketplace first, then install:
 
 ```
-/plugin install Finndersen/claude-introspect
+/plugin marketplace add Finndersen/claude-introspect
+/plugin install claude-introspect@claude-introspect
 ```
+
+(`claude-introspect@claude-introspect` is `<plugin-name>@<marketplace-name>` — both happen to be named `claude-introspect`.)
 
 The bundled `.mcp.json` uses `uv run --directory ${CLAUDE_PLUGIN_ROOT} claude-introspect`, so the MCP server runs from the plugin's local source — no network fetch per invocation. Requires `uv` to be installed.
 

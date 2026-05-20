@@ -1,0 +1,13 @@
+{
+  "name": "claude-introspect",
+  "owner": {
+    "name": "Finn Andersen"
+  },
+  "plugins": [
+    {
+      "name": "claude-introspect",
+      "source": ".",
+      "description": "Discover and extract context from past Claude Code sessions — list, search, view, and ask questions across your conversation history."
+    }
+  ]
+}
