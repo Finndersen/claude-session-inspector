@@ -204,6 +204,7 @@ class SessionInfo:
     event_count: int
     session_summary: str | None = None
     active: ActiveInfo | None = None
+    last_assistant_snippet: str | None = None
 
 
 @dataclass
@@ -214,10 +215,13 @@ class _SessionDetails:
     cwd: str | None
     session_summary: str | None
     event_count: int = 0
+    last_assistant_snippet: str | None = None
 
 
 _AWAY_SUMMARY_STRIP = "(disable recaps in /config)"
 _AWAY_SUMMARY_MARKER = b'"away_summary"'
+_LAST_ASSISTANT_MARKER = b'"type": "assistant"'
+_SIDECHAIN_TRUE_MARKER = b'"isSidechain": true'
 _HEAD_LINES_FOR_PROMPT = 50
 
 
@@ -237,8 +241,10 @@ def _read_session_details(session_file: Path) -> _SessionDetails:
     git_branch: str | None = None
     cwd: str | None = None
     session_summary: str | None = None
+    last_assistant_snippet: str | None = None
     event_count = 0
     last_away_summary_raw: bytes | None = None
+    last_assistant_raw: bytes | None = None
 
     try:
         with session_file.open("rb") as f:
@@ -246,6 +252,8 @@ def _read_session_details(session_file: Path) -> _SessionDetails:
                 event_count += 1
                 if _AWAY_SUMMARY_MARKER in raw_line:
                     last_away_summary_raw = raw_line
+                if _LAST_ASSISTANT_MARKER in raw_line and _SIDECHAIN_TRUE_MARKER not in raw_line:
+                    last_assistant_raw = raw_line
 
                 if line_no < _HEAD_LINES_FOR_PROMPT:
                     line = raw_line.decode("utf-8", errors="replace").strip()
@@ -289,7 +297,30 @@ def _read_session_details(session_file: Path) -> _SessionDetails:
         except json.JSONDecodeError:
             pass
 
-    return _SessionDetails(first_prompt, first_timestamp, git_branch, cwd, session_summary, event_count)
+    if last_assistant_raw is not None:
+        try:
+            entry = json.loads(last_assistant_raw.decode("utf-8", errors="replace").strip())
+            if entry.get("type") == "assistant" and not entry.get("isSidechain"):
+                content = entry.get("message", {}).get("content", [])
+                if isinstance(content, list):
+                    text_parts = [
+                        b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
+                    ]
+                    text = "\n".join(filter(None, text_parts)).strip()
+                    if text:
+                        last_assistant_snippet = text[:200]
+                    else:
+                        tool_names = [
+                            b.get("name")
+                            for b in content
+                            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name")
+                        ]
+                        if tool_names:
+                            last_assistant_snippet = f"[used {', '.join(tool_names[:3])}]"
+        except json.JSONDecodeError:
+            pass
+
+    return _SessionDetails(first_prompt, first_timestamp, git_branch, cwd, session_summary, event_count, last_assistant_snippet)
 
 
 def get_session_metadata(session_file: Path, project_dir: str) -> SessionInfo | None:
@@ -312,6 +343,7 @@ def get_session_metadata(session_file: Path, project_dir: str) -> SessionInfo | 
             file_size_bytes=stat.st_size,
             event_count=details.event_count,
             session_summary=details.session_summary,
+            last_assistant_snippet=details.last_assistant_snippet,
         )
     except OSError:
         return None
@@ -441,6 +473,7 @@ def discover_sessions(
                 event_count=details.event_count,
                 session_summary=details.session_summary,
                 active=active_info,
+                last_assistant_snippet=details.last_assistant_snippet,
             )
         )
 

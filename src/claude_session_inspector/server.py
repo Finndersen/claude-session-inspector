@@ -46,8 +46,8 @@ def _current_time_str() -> str:
     return datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def _format_session_row_common(s: SessionInfo) -> tuple[str, str, str, str, float, str, str]:
-    """Return (working_dir, branch, last_active, started, size_kb, prompt, summary)."""
+def _format_session_row_common(s: SessionInfo) -> tuple[str, str, str, str, float, str, str, str]:
+    """Return (working_dir, branch, last_active, started, size_kb, prompt, summary, last_response)."""
     branch = s.git_branch or "unknown"
     last_active = _format_timestamp(s.last_timestamp)
     started = _format_timestamp(s.first_timestamp)
@@ -57,25 +57,28 @@ def _format_session_row_common(s: SessionInfo) -> tuple[str, str, str, str, floa
         prompt = prompt[:300] + "..."
     summary = (s.session_summary or "").replace("|", " ").replace("\n", " ").strip()
     working_dir = (s.cwd or s.project_dir).replace("|", " ")
-    return working_dir, branch, last_active, started, size_kb, prompt, summary
+    last_response = (s.last_assistant_snippet or "").replace("|", " ").replace("\n", " ").strip()
+    if len(last_response) > 200:
+        last_response = last_response[:200] + "..."
+    return working_dir, branch, last_active, started, size_kb, prompt, summary, last_response
 
 
 def _format_active_sessions_table(sessions: list[SessionInfo]) -> str:
     """Format active sessions as a pipe-separated table with live-process columns."""
     header = (
         "session_id | name | status | waiting_for | pid | working_dir | branch"
-        " | last_active | started | size_kb | events | first_prompt | session_summary"
+        " | last_active | started | size_kb | events | first_prompt | session_summary | last_response"
     )
     rows = [header]
     for s in sessions:
         active: ActiveInfo = s.active  # type: ignore[assignment]  # caller guarantees non-None
-        working_dir, branch, last_active, started, size_kb, prompt, summary = _format_session_row_common(s)
+        working_dir, branch, last_active, started, size_kb, prompt, summary, last_response = _format_session_row_common(s)
         name = (active.name or "").replace("|", " ")
         waiting_for = (active.waiting_for or "").replace("|", " ")
         rows.append(
             f"{s.session_id} | {name} | {active.status} | {waiting_for} | {active.pid}"
             f" | {working_dir} | {branch} | {last_active} | {started}"
-            f" | {size_kb} | {s.event_count} | {prompt} | {summary}"
+            f" | {size_kb} | {s.event_count} | {prompt} | {summary} | {last_response}"
         )
     return "\n".join(rows)
 
@@ -83,14 +86,14 @@ def _format_active_sessions_table(sessions: list[SessionInfo]) -> str:
 def _format_historical_sessions_table(sessions: list[SessionInfo]) -> str:
     """Format historical (non-active) sessions as a pipe-separated table."""
     header = (
-        "session_id | working_dir | branch | last_active | started | size_kb | events | first_prompt | session_summary"  # noqa: E501
+        "session_id | working_dir | branch | last_active | started | size_kb | events | first_prompt | session_summary | last_response"  # noqa: E501
     )
     rows = [header]
     for s in sessions:
-        working_dir, branch, last_active, started, size_kb, prompt, summary = _format_session_row_common(s)
+        working_dir, branch, last_active, started, size_kb, prompt, summary, last_response = _format_session_row_common(s)
         rows.append(
             f"{s.session_id} | {working_dir} | {branch} | {last_active} | {started}"
-            f" | {size_kb} | {s.event_count} | {prompt} | {summary}"
+            f" | {size_kb} | {s.event_count} | {prompt} | {summary} | {last_response}"
         )
     return "\n".join(rows)
 
@@ -100,10 +103,15 @@ def _format_search_result(match: SearchMatch) -> str:
     first_prompt = match.first_prompt if match.first_prompt else "(empty)"
     result = f"""Session: {match.session_id}
 Working dir: {match.working_dir or "(unknown)"}
+Branch: {match.git_branch or "unknown"}
+Last active: {_format_timestamp(match.last_active)}
+Started: {_format_timestamp(match.started)}
 Matches: {match.match_count}
 First prompt: {first_prompt}"""
     if match.session_summary:
         result += f"\nSession summary: {match.session_summary}"
+    if match.last_assistant_snippet:
+        result += f"\nLast response: {match.last_assistant_snippet}"
     if match.snippets:
         snippets_text = "\n".join(f"  > {s}" for s in match.snippets)
         result += f"\n\nMatching snippets:\n{snippets_text}"

@@ -25,6 +25,7 @@ def mock_session(
     event_count: int = 10,
     session_summary: str | None = None,
     active: ActiveInfo | None = None,
+    last_assistant_snippet: str | None = None,
 ) -> SessionInfo:
     """Create a mock SessionInfo for testing."""
     return SessionInfo(
@@ -40,6 +41,7 @@ def mock_session(
         event_count=event_count,
         session_summary=session_summary,
         active=active,
+        last_assistant_snippet=last_assistant_snippet,
     )
 
 
@@ -165,6 +167,7 @@ def test_sessions_browse_historical_table_columns():
         assert "events" in result
         assert "first_prompt" in result
         assert "session_summary" in result
+        assert "last_response" in result
 
 
 def test_sessions_browse_cwd_fallback_to_project_dir():
@@ -288,6 +291,22 @@ def test_sessions_browse_both_sections_present():
         assert "## Recent sessions (showing 1 of 1)" in result
         assert "active-id" in result
         assert "hist-id" in result
+
+
+def test_sessions_browse_last_response_shown():
+    """last_assistant_snippet is rendered in the last_response column."""
+    session = mock_session(last_assistant_snippet="Done! The tests all pass now.")
+    with patch("claude_session_inspector.server.discover_sessions", return_value=([session], 1)):
+        result = list_sessions()
+        assert "Done! The tests all pass now." in result
+
+
+def test_sessions_browse_last_response_absent():
+    """Missing last_assistant_snippet produces an empty field, not an error."""
+    session = mock_session(last_assistant_snippet=None)
+    with patch("claude_session_inspector.server.discover_sessions", return_value=([session], 1)):
+        result = list_sessions()
+        assert "last_response" in result
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -423,6 +442,9 @@ def test_sessions_search_all_fields_present():
         required_fields = [
             "Session:",
             "Working dir:",
+            "Branch:",
+            "Last active:",
+            "Started:",
             "Matches:",
             "First prompt:",
             "Matching snippets:",
@@ -456,6 +478,100 @@ def test_sessions_search_includes_current_time():
     with patch("claude_session_inspector.server._search_sessions_impl", return_value=[match]):
         result = search_sessions("test")
         assert "Current time:" in result
+
+
+def test_sessions_search_branch_shown():
+    """Branch is shown in search result output when present."""
+    match = SearchMatch(
+        session_id="abc",
+        working_dir="/path/to/project",
+        match_count=2,
+        snippets=["match"],
+        first_prompt="Test prompt",
+        git_branch="feature/auth",
+    )
+    with patch("claude_session_inspector.server._search_sessions_impl", return_value=[match]):
+        result = search_sessions("auth")
+        assert "Branch: feature/auth" in result
+
+
+def test_sessions_search_branch_unknown_when_none():
+    """Branch shows 'unknown' when git_branch is None."""
+    match = SearchMatch(
+        session_id="abc",
+        working_dir="/path/to/project",
+        match_count=1,
+        snippets=["match"],
+        first_prompt="Test prompt",
+        git_branch=None,
+    )
+    with patch("claude_session_inspector.server._search_sessions_impl", return_value=[match]):
+        result = search_sessions("test")
+        assert "Branch: unknown" in result
+
+
+def test_sessions_search_timestamps_shown():
+    """last_active and started timestamps are shown in search results."""
+    match = SearchMatch(
+        session_id="abc",
+        working_dir="/path/to/project",
+        match_count=1,
+        snippets=["match"],
+        first_prompt="Test prompt",
+        last_active=datetime(2026, 5, 16, 10, 30, tzinfo=timezone.utc),
+        started=datetime(2026, 5, 16, 9, 15, tzinfo=timezone.utc),
+    )
+    with patch("claude_session_inspector.server._search_sessions_impl", return_value=[match]):
+        result = search_sessions("test")
+        assert "Last active: 2026-05-16 10:30 UTC" in result
+        assert "Started: 2026-05-16 09:15 UTC" in result
+
+
+def test_sessions_search_timestamps_unknown_when_none():
+    """Timestamps show 'unknown' when None."""
+    match = SearchMatch(
+        session_id="abc",
+        working_dir="/path/to/project",
+        match_count=1,
+        snippets=["match"],
+        first_prompt="Test prompt",
+        last_active=None,
+        started=None,
+    )
+    with patch("claude_session_inspector.server._search_sessions_impl", return_value=[match]):
+        result = search_sessions("test")
+        assert "Last active: unknown" in result
+        assert "Started: unknown" in result
+
+
+def test_sessions_search_last_response_shown():
+    """last_assistant_snippet is shown in search results when present."""
+    match = SearchMatch(
+        session_id="abc",
+        working_dir="/path/to/project",
+        match_count=1,
+        snippets=["match"],
+        first_prompt="Test prompt",
+        last_assistant_snippet="The migration is complete.",
+    )
+    with patch("claude_session_inspector.server._search_sessions_impl", return_value=[match]):
+        result = search_sessions("test")
+        assert "Last response: The migration is complete." in result
+
+
+def test_sessions_search_last_response_absent_when_none():
+    """Last response line is omitted entirely when last_assistant_snippet is None."""
+    match = SearchMatch(
+        session_id="abc",
+        working_dir="/path/to/project",
+        match_count=1,
+        snippets=["match"],
+        first_prompt="Test prompt",
+        last_assistant_snippet=None,
+    )
+    with patch("claude_session_inspector.server._search_sessions_impl", return_value=[match]):
+        result = search_sessions("test")
+        assert "Last response:" not in result
 
 
 # ─────────────────────────────────────────────────────────────────────────

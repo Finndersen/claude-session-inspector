@@ -316,6 +316,7 @@ def test_get_session_metadata(tmp_path: Path):
     assert info.git_branch == "main"
     assert info.cwd == "/home/user/project"
     assert info.session_summary is None
+    assert info.last_assistant_snippet == "Hello! How can I help?"
 
 
 def test_get_session_metadata_empty_file(tmp_path: Path):
@@ -405,6 +406,93 @@ def test_get_session_metadata_no_away_summary(tmp_path: Path):
     info = get_session_metadata(session_file, "-Users-test-projects-Foo")
     assert info is not None
     assert info.session_summary is None
+
+
+def test_get_session_metadata_last_assistant_snippet_text(tmp_path: Path):
+    """last_assistant_snippet should contain the last assistant text response."""
+    session_file = tmp_path / "sess-snip.jsonl"
+    second_assistant = {
+        **ASSISTANT_ENTRY,
+        "uuid": "a-002",
+        "message": {
+            "role": "assistant",
+            "model": "claude-3-opus",
+            "content": [{"type": "text", "text": "Here is the final answer."}],
+        },
+    }
+    _write_jsonl(session_file, [USER_ENTRY, ASSISTANT_ENTRY, USER_ENTRY, second_assistant])
+    info = get_session_metadata(session_file, "-Users-test-projects-Foo")
+    assert info is not None
+    assert info.last_assistant_snippet == "Here is the final answer."
+
+
+def test_get_session_metadata_last_assistant_snippet_tool_only(tmp_path: Path):
+    """Tool-only last assistant message shows tool names as the snippet."""
+    tool_only = {
+        **ASSISTANT_ENTRY,
+        "uuid": "a-tool",
+        "message": {
+            "role": "assistant",
+            "model": "claude-3-opus",
+            "content": [
+                {"type": "tool_use", "id": "t1", "name": "Read", "input": {}},
+                {"type": "tool_use", "id": "t2", "name": "Edit", "input": {}},
+            ],
+        },
+    }
+    session_file = tmp_path / "sess-tool.jsonl"
+    _write_jsonl(session_file, [USER_ENTRY, tool_only])
+    info = get_session_metadata(session_file, "-Users-test-projects-Foo")
+    assert info is not None
+    assert info.last_assistant_snippet == "[used Read, Edit]"
+
+
+def test_get_session_metadata_last_assistant_snippet_truncated(tmp_path: Path):
+    """last_assistant_snippet is truncated to 200 characters."""
+    long_text = "w" * 300
+    long_assistant = {
+        **ASSISTANT_ENTRY,
+        "uuid": "a-long",
+        "message": {
+            "role": "assistant",
+            "model": "claude-3-opus",
+            "content": [{"type": "text", "text": long_text}],
+        },
+    }
+    session_file = tmp_path / "sess-long.jsonl"
+    _write_jsonl(session_file, [USER_ENTRY, long_assistant])
+    info = get_session_metadata(session_file, "-Users-test-projects-Foo")
+    assert info is not None
+    assert info.last_assistant_snippet is not None
+    assert len(info.last_assistant_snippet) == 200
+
+
+def test_get_session_metadata_last_assistant_snippet_skips_sidechain(tmp_path: Path):
+    """Sidechain assistant messages are not used for last_assistant_snippet."""
+    sidechain_assistant = {**ASSISTANT_ENTRY, "uuid": "a-side", "isSidechain": True}
+    text_assistant = {
+        **ASSISTANT_ENTRY,
+        "uuid": "a-real",
+        "message": {
+            "role": "assistant",
+            "model": "claude-3-opus",
+            "content": [{"type": "text", "text": "Real response."}],
+        },
+    }
+    session_file = tmp_path / "sess-side.jsonl"
+    _write_jsonl(session_file, [USER_ENTRY, text_assistant, sidechain_assistant])
+    info = get_session_metadata(session_file, "-Users-test-projects-Foo")
+    assert info is not None
+    assert info.last_assistant_snippet == "Real response."
+
+
+def test_get_session_metadata_no_assistant_messages(tmp_path: Path):
+    """Sessions with no assistant messages have None last_assistant_snippet."""
+    session_file = tmp_path / "sess-user-only.jsonl"
+    _write_jsonl(session_file, [USER_ENTRY])
+    info = get_session_metadata(session_file, "-Users-test-projects-Foo")
+    assert info is not None
+    assert info.last_assistant_snippet is None
 
 
 # ---------------------------------------------------------------------------

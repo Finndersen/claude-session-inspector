@@ -1,7 +1,7 @@
 {
   "name": "claude-introspect",
-  "version": "0.1.0",
-  "description": "Discover and extract context from past Claude Code sessions — list, search, view, and ask questions across your conversation history. Bundles an MCP server (claude-introspect) and a session-inspector sub-agent.",
+  "version": "0.1.1",
+  "description": "Discover and extract context from past Claude Code sessions \u2014 list, search, view, and ask questions across your conversation history. Bundles an MCP server (claude-introspect) and a session-inspector sub-agent.",
   "author": {
     "name": "Finn Andersen"
   }

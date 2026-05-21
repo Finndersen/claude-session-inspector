@@ -3,6 +3,7 @@
 import json
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from claude_session_inspector.sessions import (
@@ -22,6 +23,10 @@ class SearchMatch:
     snippets: list[str]
     first_prompt: str
     session_summary: str | None = None
+    git_branch: str | None = None
+    last_active: datetime | None = None
+    started: datetime | None = None
+    last_assistant_snippet: str | None = None
 
 
 def search_sessions(
@@ -129,6 +134,10 @@ def search_sessions(
                 snippets=truncated_snippets,
                 first_prompt=metadata.first_prompt,
                 session_summary=metadata.session_summary,
+                git_branch=metadata.git_branch,
+                last_active=metadata.last_timestamp,
+                started=metadata.first_timestamp,
+                last_assistant_snippet=metadata.last_assistant_snippet,
             )
         )
 
