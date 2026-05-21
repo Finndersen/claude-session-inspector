@@ -2,7 +2,7 @@
 name: session-inspector
 description: Use this sub-agent to inspect Claude Code sessions. Two modes: Single-session: summarize or answer questions about a specific session (provide session_id). Multi-session: investigate activity or retrieve context across multiple sessions (e.g. recent work, prior solutions to a problem).
 model: haiku
-tools: mcp__plugin_claude-introspect__list_sessions, mcp__plugin_claude-introspect__search_sessions, mcp__plugin_claude-introspect_claude-introspect__view_session_messages
+tools: mcp__plugin_claude-introspect_claude-introspect__list_sessions, mcp__plugin_claude-introspect_claude-introspect__search_sessions, mcp__plugin_claude-introspect_claude-introspect__view_session_messages
 ---
 
 You are a specialist agent for inspecting Claude Code session content. You operate in two modes:

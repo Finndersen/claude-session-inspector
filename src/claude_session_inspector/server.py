@@ -251,7 +251,15 @@ def search_sessions(
 
 @mcp.tool()
 def view_session_messages(
-    session_id: Annotated[str, Field(description="Session UUID (from list_sessions).")],
+    session_id: Annotated[
+        str,
+        Field(
+            description=(
+                "Session UUID from list_sessions or search_sessions. Must be a real UUID — "
+                "call those tools first if you don't already have one."
+            )
+        ),
+    ],
     start_index: Annotated[
         int | None,
         Field(description=("Start of message slice (0-based, negative ok: -1 = last message). None = from beginning.")),

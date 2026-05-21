@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-introspect"
-version = "0.1.0"
+version = "0.1.1"
 description = "MCP server for introspecting Claude Code session history — browse, search, read, and query past conversations"
 requires-python = ">=3.11"
 dependencies = [
