@@ -16,6 +16,12 @@ Claude Code stores all session conversations as JSONL files under `~/.claude/pro
 
 The plugin also bundles a `session-inspector` sub-agent type. When a session needs deeper inspection (summary, question answering), Claude spawns this sub-agent rather than reading raw transcripts directly — it uses the primitive MCP tools efficiently to gather only the context needed.
 
+## Requirements
+
+- Python 3.11+
+- `uv` — required to run the MCP server
+- `rg` (ripgrep) — required for `search_sessions`
+
 ## Installation
 
 ### As a Claude Code plugin (recommended)
@@ -26,10 +32,6 @@ Install via Claude Code's plugin system — registers both the MCP server and th
 /plugin marketplace add Finndersen/claude-introspect
 /plugin install claude-introspect@claude-introspect
 ```
-
-(`claude-introspect@claude-introspect` is `<plugin-name>@<marketplace-name>` — both happen to be named `claude-introspect`.)
-
-The bundled `.mcp.json` uses `uv run --directory ${CLAUDE_PLUGIN_ROOT} claude-introspect`, so the MCP server runs from the plugin's local source — no network fetch per invocation. Requires `uv` to be installed.
 
 ### Standalone MCP server
 
@@ -67,10 +69,6 @@ By default reads from `~/.claude/projects/`. Override with the `CLAUDE_CONFIG_DI
   }
 }
 ```
-
-**Requirements:**
-- Python 3.11+
-- `rg` (ripgrep) — required for `search_sessions`
 
 ## MCP Tools
 
@@ -135,21 +133,3 @@ Read the conversation transcript of a specific session. Supports Python-style in
 
 Use `start_index=-5` to get the last 5 messages, or combine `start_index`/`end_index` to focus on a specific range.
 
----
-
-## session-inspector sub-agent
-
-The plugin bundles a `session-inspector` sub-agent type (defined in `agents/session-inspector.md`). It is a specialist for inspecting session content and is configured to use only the `list_sessions`, `search_sessions`, and `view_session_messages` tools, running on Claude Haiku for efficiency.
-
-**When to use it:** Spawn the sub-agent in two situations:
-- **Single session**: after identifying a session of interest via `list_sessions` or `search_sessions`, to get a synthesized summary or answer a specific question about it
-- **Multi-session investigation**: when asked to investigate activity or retrieve context across multiple sessions (recent work, prior solutions, cross-session patterns) — the agent handles browsing, searching, and drilling in efficiently
-
-**How it works (single session):**
-1. Retrieves the full conversation (user + assistant + tool calls + tool results) for complete context
-2. For very long sessions, uses `start_index`/`end_index` slicing only when the location is predictable (e.g. last N messages for final outcome, first N for initial approach)
-3. Uses the `session_summary` field from `list_sessions` as a useful starting point when available
-
-**How it works (multi-session investigation):**
-1. Starts with `search_sessions` for topic-specific queries (e.g. finding prior solutions to a known problem), or `list_sessions` for broad activity queries (e.g. recent work across a project)
-2. Drills into relevant sessions with `view_session_messages` and synthesizes findings across them
